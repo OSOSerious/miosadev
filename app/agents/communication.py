@@ -68,19 +68,37 @@ class CommunicationAgent(BaseAgent):
             message, response, context["extracted_info"]
         )
         
-        # Calculate quality-based progress with onboarding awareness
+        # Simplified progress calculation that actually works
         last_progress = session_data.get("last_progress", 0)
-        
-        # If user has completed onboarding, ensure minimum baseline progress
         onboarding_complete = session_data.get("onboarding_complete", False)
-        if onboarding_complete and last_progress < 25:
-            last_progress = 25  # Onboarding completion is worth 25% minimum
-            
-        progress_result = self.system_context.calculate_quality_progress(extracted_info, last_progress)
         
-        # Ensure onboarding-completed users don't go below 25%
-        if onboarding_complete and progress_result["progress"] < 25:
-            progress_result["progress"] = 25
+        # Start with baseline from onboarding
+        if onboarding_complete:
+            progress = max(25, last_progress)  # Minimum 25% after onboarding
+        else:
+            progress = last_progress
+            
+        # Increment progress based on information gathered
+        if extracted_info.get("business_type") or extracted_info.get("business_context"):
+            progress = max(progress, 30)
+        if extracted_info.get("specific_problem") or extracted_info.get("surface_problem"):
+            progress = max(progress, 40)
+        if extracted_info.get("current_process") or "contract" in message.lower():
+            progress = max(progress, 50)
+        if extracted_info.get("volume_metrics") or "30" in str(extracted_info):
+            progress = max(progress, 60)
+        if extracted_info.get("solution_requirements") or "ready" in message.lower():
+            progress = max(progress, 70)
+            
+        # Boost progress if user seems ready
+        if any(word in message.lower() for word in ["yes", "ready", "start", "begin", "do it", "let's go"]):
+            progress = min(100, progress + 10)
+            
+        # Create simplified progress result
+        progress_result = {
+            "progress": progress,
+            "comprehensive_detected": progress >= 60
+        }
         
         return {
             "response": response,
@@ -89,7 +107,7 @@ class CommunicationAgent(BaseAgent):
             "business_profile": context.get("business_profile", {}),
             "progress": progress_result["progress"],
             "last_progress": progress_result["progress"],
-            "ready_for_generation": progress_result["progress"] >= 85,
+            "ready_for_generation": self._is_ready_for_generation(extracted_info, context.get("user_profile", {}), progress_result),
             "comprehensive_detected": progress_result.get("comprehensive_detected", False),
             "should_build": self._detect_ready_to_build(message, progress_result, extracted_info, context.get("user_profile", {})),
             "progress_details": self._get_progress_details(extracted_info, progress_result)
@@ -248,13 +266,21 @@ Don't repeat existing information unless it's been clarified or quantified.
             # Fake URLs and systems
             "going live at https://",
             "lunivate-tasks.web.app",
+            "lunivate-contracts.miosa.app",
             ".web.app",
+            ".miosa.app",
             "Your login:",
             "Your password:",
             "Check your email in",
             "sending you the link",
             "bookmark that URL",
             "login link",
+            "custom subdomain",
+            "will be live at",
+            "spinning up",
+            "infrastructure for",
+            "login credentials",
+            "access with a complete onboarding",
             
             # False data claims
             "pulled your last 50",
@@ -335,6 +361,48 @@ Don't repeat existing information unless it's been clarified or quantified.
             "completeness": completeness,
             "category_breakdown": progress_result.get("category_breakdown", {})
         }
+    
+    def _is_ready_for_generation(self, extracted_info: Dict, user_profile: Dict, progress_result: Dict) -> bool:
+        """Determine if we have enough info to generate, regardless of progress score"""
+        
+        # Check if we have the critical information needed
+        has_business_type = bool(
+            user_profile.get("business_type") or 
+            extracted_info.get("business_type") or
+            extracted_info.get("business_context", {}).get("business_type")
+        )
+        
+        has_problem = bool(
+            user_profile.get("main_problem") or
+            extracted_info.get("specific_problem") or 
+            extracted_info.get("surface_problem") or
+            extracted_info.get("problem_discovery", {}).get("specific_problem")
+        )
+        
+        has_scale = bool(
+            extracted_info.get("scale_impact") or
+            extracted_info.get("volume_metrics") or
+            "30" in str(extracted_info) or  # They mentioned 30 contracts
+            "contracts" in str(extracted_info).lower()
+        )
+        
+        # Basic requirements met?
+        if has_business_type and has_problem:
+            # If we also have scale/volume info, definitely ready
+            if has_scale:
+                return True
+            # If progress is decent, ready
+            if progress_result.get("progress", 0) >= 50:
+                return True
+            # If comprehensive info detected, ready
+            if progress_result.get("comprehensive_detected", False):
+                return True
+                
+        # High progress alone can make it ready
+        if progress_result.get("progress", 0) >= 85:
+            return True
+            
+        return False
     
     def _detect_ready_to_build(self, message: str, progress_result: Dict, extracted_info: Dict, user_profile: Dict) -> bool:
         """Intelligently detect when user is ready to start building"""

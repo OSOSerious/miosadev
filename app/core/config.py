@@ -1,7 +1,6 @@
 # app/core/config.py
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field, computed_field
-from typing import Optional
 from functools import lru_cache
 
 class Settings(BaseSettings):
@@ -38,10 +37,6 @@ class Settings(BaseSettings):
     # Groq API (with Kimi K2 support)
     GROQ_API_KEY: str = Field(..., validation_alias="GROQ_API_KEY")
     GROQ_MODEL: str = Field(default="moonshotai/kimi-k2-instruct")  # Kimi K2 through Groq
-    
-    # Moonshot AI API (optional - not needed for Kimi through Groq)
-    MOONSHOT_API_KEY: Optional[str] = Field(default=None, validation_alias="MOONSHOT_API_KEY")
-    MOONSHOT_MODEL: str = Field(default="kimi-k2-instruct")
     
     # Frontend
     FRONTEND_URL: str = Field(default="http://localhost:5173")

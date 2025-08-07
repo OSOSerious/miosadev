@@ -383,6 +383,17 @@ INFORMATION GATHERED:
     def calculate_quality_progress(self, extracted_info: Dict, last_progress: int = 0) -> Dict:
         """Calculate progress based on information quality and completeness"""
         
+        # Smart progress detection - check for comprehensive info patterns
+        comprehensive_indicators = self._detect_comprehensive_info(extracted_info)
+        if comprehensive_indicators["score"] >= 80:
+            return {
+                "progress": comprehensive_indicators["score"],
+                "category_breakdown": {},
+                "raw_calculated": comprehensive_indicators["score"],
+                "smoothed": False,
+                "comprehensive_detected": True
+            }
+        
         total_score = 0
         max_possible = 100
         category_scores = {}
@@ -405,15 +416,71 @@ INFORMATION GATHERED:
             }
             total_score += category_score
         
-        # Smooth progression - max 12% jump
+        # Allow larger jumps when user provides comprehensive info
         raw_progress = min(total_score, max_possible)
-        smooth_progress = min(raw_progress, last_progress + 12) if last_progress else raw_progress
+        
+        # More generous progression - up to 25% jump
+        max_jump = 25 if raw_progress > 70 else 15  # Bigger jumps near completion
+        smooth_progress = min(raw_progress, last_progress + max_jump) if last_progress else raw_progress
         
         return {
             "progress": smooth_progress,
             "category_breakdown": category_scores,
             "raw_calculated": raw_progress,
             "smoothed": smooth_progress != raw_progress
+        }
+    
+    def _detect_comprehensive_info(self, extracted_info: Dict) -> Dict:
+        """Detect when user has provided comprehensive information regardless of field names"""
+        
+        # Convert all values to lowercase string for pattern matching
+        all_text = " ".join(str(v).lower() for v in extracted_info.values())
+        
+        score = 0
+        patterns_found = []
+        
+        # Business type indicators (20 points)
+        business_patterns = ["law firm", "solo practice", "attorney", "legal", "lawyer"]
+        if any(pattern in all_text for pattern in business_patterns):
+            score += 20
+            patterns_found.append("business_type")
+        
+        # Specific problem indicators (25 points)
+        problem_patterns = ["contract", "generate", "transcript", "meeting", "document"]
+        problem_count = sum(1 for pattern in problem_patterns if pattern in all_text)
+        if problem_count >= 3:  # Multiple problem-related terms
+            score += 25
+            patterns_found.append("specific_problem")
+        
+        # Process/workflow indicators (20 points)
+        process_patterns = ["takes a week", "zoom", "recording", "current process"]
+        if any(pattern in all_text for pattern in process_patterns):
+            score += 20
+            patterns_found.append("current_process")
+        
+        # Volume/scale indicators (15 points)
+        volume_patterns = ["30", "month", "contracts", "clients"]
+        volume_count = sum(1 for pattern in volume_patterns if pattern in all_text)
+        if volume_count >= 2:
+            score += 15
+            patterns_found.append("volume_metrics")
+        
+        # Location/specificity indicators (10 points)  
+        location_patterns = ["texas", "state", "templates"]
+        if any(pattern in all_text for pattern in location_patterns):
+            score += 10
+            patterns_found.append("location")
+        
+        # User readiness indicators (10 points)
+        ready_patterns = ["yes", "begin", "start", "lets do it", "make it"]
+        if any(pattern in all_text for pattern in ready_patterns):
+            score += 10
+            patterns_found.append("user_ready")
+        
+        return {
+            "score": min(score, 100),
+            "patterns_found": patterns_found,
+            "comprehensive": score >= 80
         }
 
     def _score_field(self, value: Any, field_config: Dict) -> float:

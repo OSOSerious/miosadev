@@ -20,23 +20,19 @@ class OnboardingStep(Enum):
 class UserProfile:
     """Complete user profile for personalized service"""
     
-    # Personal
+    # Required fields (no defaults)
     name: str
     email: str
-    preferred_name: Optional[str] = None
-    
-    # Business
     business_name: str
     business_type: str
+    main_problem: str
+    
+    # Optional fields (with defaults)
+    preferred_name: Optional[str] = None
     industry: Optional[str] = None
     team_size: Optional[int] = None
     role: Optional[str] = None
-    
-    # Initial problem
-    main_problem: str
     urgency: Optional[str] = None
-    
-    # System
     communication_style: str = "professional"
     onboarding_complete: bool = False
 
@@ -147,22 +143,42 @@ I'm MIOSA. First, what's your name?"""
             profile["onboarding_complete"] = True
             return OnboardingStep.COMPLETE, self._complete_onboarding(profile), True
         
-        next_step = list(OnboardingStep)[next_step_index + 1]  # +1 because NAME is first
+        # Map step index to OnboardingStep enum
+        step_mapping = [
+            OnboardingStep.NAME,
+            OnboardingStep.EMAIL, 
+            OnboardingStep.BUSINESS_NAME,
+            OnboardingStep.BUSINESS_TYPE,
+            OnboardingStep.TEAM_SIZE,
+            OnboardingStep.MAIN_PROBLEM
+        ]
+        
+        next_step = step_mapping[next_step_index] if next_step_index < len(step_mapping) else OnboardingStep.COMPLETE
         next_question = self.get_current_question(next_step, profile)
         
         return next_step, next_question, True
     
     def _get_step_index(self, step: OnboardingStep) -> int:
         """Get the index of the current step"""
-        step_map = {
-            OnboardingStep.NAME: 0,
-            OnboardingStep.EMAIL: 1,
-            OnboardingStep.BUSINESS_NAME: 2,
-            OnboardingStep.BUSINESS_TYPE: 3,
-            OnboardingStep.TEAM_SIZE: 4,
-            OnboardingStep.MAIN_PROBLEM: 5
+        step_field_map = {
+            OnboardingStep.NAME: "name",
+            OnboardingStep.EMAIL: "email", 
+            OnboardingStep.BUSINESS_NAME: "business_name",
+            OnboardingStep.BUSINESS_TYPE: "business_type",
+            OnboardingStep.TEAM_SIZE: "team_size",
+            OnboardingStep.MAIN_PROBLEM: "main_problem"
         }
-        return step_map.get(step, -1)
+        
+        field = step_field_map.get(step)
+        if not field:
+            return -1
+            
+        # Find the step index by field name
+        for i, step_info in enumerate(self.steps):
+            if step_info["field"] == field:
+                return i
+        
+        return -1
     
     def _complete_onboarding(self, profile: Dict) -> str:
         """Generate completion message with summary"""
@@ -184,6 +200,73 @@ Now let's dive deep into this issue so I can build you the perfect solution. Tel
             return False, "please tell me your name so I can personalize our conversation.", ""
         if len(name) < 2:
             return False, "that seems too short for a name. What's your full name?", ""
+        
+        # Split the input to check each word
+        words = name.lower().split()
+        
+        # Reject common non-names and greetings
+        invalid_names = [
+            'hey', 'hi', 'hello', 'yo', 'sup', 'heyo', 'hiya',
+            'um', 'uh', 'err', 'hmm', 'what', 'wtf', 'lol', 'lmao', 'rofl', 'haha',
+            'yes', 'no', 'ok', 'okay', 'sure', 'maybe', 'nope', 'yep', 'yeah', 'nah',
+            'test', 'testing', 'asdf', 'abc', '123', 'qwerty',
+            'wait', 'stop', 'hold', 'pause', 'continue', 'next', 'skip',
+            'help', 'info', 'about', 'why', 'how', 'when', 'where', 'who',
+            'fuck', 'shit', 'damn', 'crap', 'hell', 'bro', 'dude', 'man',
+            'cool', 'nice', 'good', 'bad', 'great', 'awesome',
+            'idk', 'dunno', 'whatever', 'nothing', 'something',
+            'blah', 'meh', 'ugh', 'sigh', 'hmph'
+        ]
+        
+        # Check if ANY word in the input is invalid (catches "lol wait", "hey there", etc)
+        for word in words:
+            if word in invalid_names:
+                # Return appropriate message based on the invalid word found
+                if word in ['lol', 'lmao', 'rofl', 'haha']:
+                    return False, "I know this seems formal, but I need your real name to build your custom system. What should I call you?", ""
+                elif word in ['wait', 'stop', 'hold', 'pause']:
+                    return False, "No problem, take your time. When you're ready, what's your first name?", ""
+                elif word in ['bro', 'dude', 'man']:
+                    return False, "I get it - this feels formal. But I need your actual name to personalize your system. What's your first name?", ""
+                elif word in ['wtf', 'fuck', 'shit', 'damn']:
+                    return False, "I understand if this is frustrating. Just need your first name to get started - what should I call you?", ""
+                else:
+                    return False, "I need your actual name to personalize our conversation. What should I call you?", ""
+        
+        # Also check the full string
+        if name.lower() in invalid_names:
+            # Vary the response based on what they typed
+            if name.lower() in ['ok', 'okay', 'sure', 'yes', 'yeah']:
+                return False, "Great! So what's your actual name?", ""
+            elif name.lower() in ['lol', 'lmao', 'rofl', 'haha']:
+                return False, "I know this seems formal, but I need your real name to build your custom system. What should I call you?", ""
+            elif name.lower() in ['wait', 'stop', 'hold', 'pause']:
+                return False, "No problem, take your time. When you're ready, what's your first name?", ""
+            elif name.lower() in ['wtf', 'fuck', 'shit', 'damn']:
+                return False, "I understand if this is frustrating. Just need your first name to get started - what should I call you?", ""
+            else:
+                return False, "I need your actual name to personalize our conversation. What should I call you?", ""
+        
+        # Check if it looks like a real name (at least has some letters)
+        if not any(c.isalpha() for c in name):
+            return False, "please provide your actual name.", ""
+        
+        # Reject single common English words that aren't typically names
+        common_words = [
+            'the', 'and', 'for', 'are', 'but', 'not', 'you', 'all', 'can', 'had',
+            'her', 'was', 'one', 'our', 'out', 'day', 'get', 'has', 'him', 'his',
+            'how', 'its', 'may', 'new', 'now', 'old', 'see', 'two', 'way', 'who',
+            'boy', 'did', 'man', 'car', 'let', 'put', 'say', 'she', 'too', 'use',
+            'well', 'just', 'like', 'want', 'need', 'have', 'been', 'were', 'than'
+        ]
+        
+        # But allow actual names that might be words (like "Will", "May", "Rose")
+        # Note: "well" is NOT a name - it's just a word
+        allowed_word_names = ['will', 'may', 'rose', 'grace', 'hope', 'faith', 'joy', 'mark', 'bill', 'jack']
+        
+        if name.lower() in common_words and name.lower() not in allowed_word_names:
+            return False, "That doesn't seem like a real name. What's your actual first name?", ""
+            
         return True, "", name.title()
     
     def _validate_email(self, email: str) -> Tuple[bool, str, str]:

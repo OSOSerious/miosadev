@@ -106,6 +106,7 @@ class ApplicationGenerationCoordinator:
         # Special case: if they're asking for help or seem confused during onboarding  
         confusion_indicators = ["help", "what", "huh", "?", "confused", "don't understand", "lost"]
         frustration_indicators = ["wtf", "fuck", "stupid", "broken", "sucks", "hate", "annoying", "terrible"]
+        correction_indicators = ["not my name", "that's not", "wrong", "no that", "incorrect", "i didn't say"]
         
         message_lower = message.lower().strip()
         
@@ -117,6 +118,17 @@ Currently, I need: {self._get_friendly_step_description(current_step)}
 
 For example, if {self._get_step_example(current_step)}"""
             
+        # Check for correction (user saying that wasn't their name/info)
+        elif any(phrase in message_lower for phrase in correction_indicators):
+            # If they're correcting, we need to go back to the appropriate step
+            if current_step == OnboardingStep.EMAIL and profile.get("name"):
+                # They're saying the name was wrong, go back to name step
+                session["onboarding_step"] = OnboardingStep.NAME
+                profile.pop("name", None)
+                help_msg = "No worries! Let's start over. What's your actual first name?"
+            else:
+                help_msg = f"Let me correct that. {self.onboarding.get_current_question(current_step, profile)}"
+        
         # Check for confusion
         elif any(word in message_lower for word in confusion_indicators):
             help_msg = f"""No problem! I'm MIOSA - I build custom business software. To create something perfect for you, I need to understand your business first.
@@ -277,13 +289,14 @@ Right now I need: {self._get_friendly_step_description(current_step)}
         })
         session["ready_for_generation"] = result.get("ready_for_generation", False)
         
-        # CRITICAL: If user has provided comprehensive info AND said "begin", start building
-        if result.get("should_build") and result.get("comprehensive_detected"):
-            logger.info(f"Triggering actual development for session {session_id}")
+        # CRITICAL: If user has provided enough info, mark ready for generation
+        if result.get("ready_for_generation") or result.get("should_build"):
+            logger.info(f"Session {session_id} ready for generation")
             session["ready_for_generation"] = True
-            session["phase"] = "building"
-            # Override response to be honest about what's happening
-            session["messages"][-1]["content"] = f"Perfect! I have all the information I need for your Texas business formation contract generator. Based on our conversation:\n\n- Solo law practice processing 30 contracts/month\n- Takes a week currently, costing significant billable time\n- Uses Zoom for client meetings\n- Needs simple/complex template detection\n\nI'm ready to build this system. Type 'generate' to start the actual development process, or we can refine the requirements further."
+            
+            # If they explicitly want to build now, set the phase
+            if result.get("should_build"):
+                session["phase"] = "building"
         
         # Save session to persistent storage
         self.session_manager.save_session(session_id, session)
