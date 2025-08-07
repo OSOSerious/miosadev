@@ -1,0 +1,145 @@
+version: '3.9'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: miosa-postgres
+    environment:
+      POSTGRES_USER: miosa_user
+      POSTGRES_PASSWORD: miosa_password
+      POSTGRES_DB: miosa_db
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - miosa-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U miosa_user -d miosa_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache & Queue
+  redis:
+    image: redis:7-alpine
+    container_name: miosa-redis
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - miosa-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # FastAPI Backend
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: miosa-backend
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      - ./app:/code/app
+      - ./uploads:/code/uploads
+      - ./migrations:/code/migrations
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://miosa_user:miosa_password@postgres:5432/miosa_db
+      - REDIS_URL=redis://redis:6379/0
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - miosa-network
+
+  # Celery Worker (for background tasks)
+  celery:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: miosa-celery
+    command: celery -A app.core.celery worker --loglevel=info
+    volumes:
+      - ./app:/code/app
+    environment:
+      - DATABASE_URL=postgresql://miosa_user:miosa_password@postgres:5432/miosa_db
+      - REDIS_URL=redis://redis:6379/0
+    env_file:
+      - .env
+    depends_on:
+      - redis
+      - postgres
+    networks:
+      - miosa-network
+
+  # Flower (Celery monitoring)
+  flower:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: miosa-flower
+    command: celery -A app.core.celery flower --port=5555
+    ports:
+      - "5555:5555"
+    environment:
+      - DATABASE_URL=postgresql://miosa_user:miosa_password@postgres:5432/miosa_db
+      - REDIS_URL=redis://redis:6379/0
+    env_file:
+      - .env
+    depends_on:
+      - redis
+      - celery
+    networks:
+      - miosa-network
+
+  # pgAdmin (optional - for database management)
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: miosa-pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@miosa.ai
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - "5050:80"
+    depends_on:
+      - postgres
+    networks:
+      - miosa-network
+    profiles:
+      - tools
+
+  # Adminer (alternative lightweight DB management)
+  adminer:
+    image: adminer:latest
+    container_name: miosa-adminer
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+    networks:
+      - miosa-network
+    profiles:
+      - tools
+
+networks:
+  miosa-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:

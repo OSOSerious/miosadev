@@ -1,0 +1,30 @@
+# requirements.txt - Latest versions for August 2025
+fastapi==0.115.5
+uvicorn[standard]==0.34.0
+groq==0.30.0  # Latest Groq SDK
+pydantic==2.10.4
+pydantic-settings==2.7.0
+sqlalchemy[asyncio]==2.1.0  # SQLAlchemy 2.1 with async
+alembic==1.15.0
+asyncpg==0.31.0  # PostgreSQL async driver
+redis[hiredis]==5.3.0
+python-dotenv==1.0.1
+httpx==0.29.0
+python-multipart==0.0.20
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+tenacity==10.0.0
+structlog==25.1.0
+pytest-asyncio==0.25.0
+ruff==0.9.0  # Modern Python linter
+aiofiles==25.0.0
+
+# CLI Dependencies
+prompt-toolkit==3.0.47
+rich==13.7.1
+nest-asyncio==1.6.0  # Handle nested event loops
+
+# Additional dependencies for code generation
+jinja2==3.1.4
+black==24.10.0  # Code formatting
+isort==5.13.2  # Import sorting
