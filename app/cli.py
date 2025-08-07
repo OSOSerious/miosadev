@@ -79,7 +79,13 @@ class MiosaCLI:
                     self._show_metrics()
                     continue
                 
-                if user_input.lower() == 'generate':
+                # Map build intent phrases to 'generate'
+                normalized = user_input.strip().lower()
+                build_aliases = [
+                    'start now', 'begin', 'build it', "let's go", 'lets go', 'do it',
+                    'start building', 'get started', "let's begin", 'build this', 'create this', 'implement'
+                ]
+                if normalized == 'generate' or any(alias == normalized for alias in build_aliases):
                     # Check if session is ready for generation
                     if self.session_id:
                         session = self.coordinator.get_session(self.session_id)
@@ -140,8 +146,19 @@ class MiosaCLI:
                 console.print(f"[red]Error processing message: {e}[/red]")
                 return
         
-        # Display response
-        console.print(f"\n🤖 [bold cyan]MIOSA:[/bold cyan] {result.get('response', 'I understand. Let me help you with that.')}\n")
+        # Display personalized response
+        user_profile = result.get('user_profile', {})
+        user_name = user_profile.get('name', '')
+        
+        # Show personalized header for responses
+        if user_name and result.get('onboarding_complete'):
+            business_name = user_profile.get('business_name', '')
+            if business_name:
+                console.print(f"\n🤖 [bold cyan]MIOSA for {user_name} ({business_name}):[/bold cyan] {result.get('response', 'I understand. Let me help you with that.')}\n")
+            else:
+                console.print(f"\n🤖 [bold cyan]MIOSA for {user_name}:[/bold cyan] {result.get('response', 'I understand. Let me help you with that.')}\n")
+        else:
+            console.print(f"\n🤖 [bold cyan]MIOSA:[/bold cyan] {result.get('response', 'I understand. Let me help you with that.')}\n")
         
         # Show detailed progress
         self._show_detailed_progress(result)
