@@ -68,9 +68,19 @@ class CommunicationAgent(BaseAgent):
             message, response, context["extracted_info"]
         )
         
-        # Calculate quality-based progress
+        # Calculate quality-based progress with onboarding awareness
         last_progress = session_data.get("last_progress", 0)
+        
+        # If user has completed onboarding, ensure minimum baseline progress
+        onboarding_complete = session_data.get("onboarding_complete", False)
+        if onboarding_complete and last_progress < 25:
+            last_progress = 25  # Onboarding completion is worth 25% minimum
+            
         progress_result = self.system_context.calculate_quality_progress(extracted_info, last_progress)
+        
+        # Ensure onboarding-completed users don't go below 25%
+        if onboarding_complete and progress_result["progress"] < 25:
+            progress_result["progress"] = 25
         
         return {
             "response": response,
@@ -81,7 +91,7 @@ class CommunicationAgent(BaseAgent):
             "last_progress": progress_result["progress"],
             "ready_for_generation": progress_result["progress"] >= 85,
             "comprehensive_detected": progress_result.get("comprehensive_detected", False),
-            "should_build": progress_result["progress"] >= 90 and any(word in message.lower() for word in ["begin", "start", "yes", "lets do it"]),
+            "should_build": self._detect_ready_to_build(message, progress_result, extracted_info, context.get("user_profile", {})),
             "progress_details": self._get_progress_details(extracted_info, progress_result)
         }
     
@@ -214,25 +224,66 @@ Don't repeat existing information unless it's been clarified or quantified.
         return merged
     
     def _validate_response_truthfulness(self, response: str, session_data: Dict) -> str:
-        """Simple validation to prevent obvious lies without corrupting text"""
+        """Prevent AI from making false claims about systems that don't exist"""
         
         # Get actual system state
         background_build = session_data.get("background_build", {})
         build_status = background_build.get("status", "idle")
+        ready_for_generation = session_data.get("ready_for_generation", False)
         
-        # Only check for very specific lying phrases that shouldn't appear
+        # Expanded list of false claims to prevent
         dangerous_lies = [
+            # Building claims
             "I'm building this right now",
             "The build is running", 
             "ready in 12 minutes",
+            "I'm starting the build right now",
+            "I just pushed the final build",
+            "Your system is live",
+            "already built",
+            "just deployed",
+            "actively monitoring",
+            "already processed",
+            
+            # Fake URLs and systems
             "going live at https://",
-            "I'm starting the build right now"
+            "lunivate-tasks.web.app",
+            ".web.app",
+            "Your login:",
+            "Your password:",
+            "Check your email in",
+            "sending you the link",
+            "bookmark that URL",
+            "login link",
+            
+            # False data claims
+            "pulled your last 50",
+            "extracted 23 active tasks",
+            "7 urgent items",
+            "already working",
+            "actively watching",
+            "has already processed"
         ]
         
-        # If we find exact dangerous lies, replace only those
+        # Check for and remove dangerous lies
+        response_lower = response.lower()
         for lie in dangerous_lies:
-            if lie.lower() in response.lower() and build_status == "idle":
-                response = response.replace(lie, "I'm analyzing your requirements")
+            if lie.lower() in response_lower:
+                # Only make claims we can actually deliver on
+                if not ready_for_generation and build_status == "idle":
+                    # Remove the entire sentence containing the lie
+                    sentences = response.split('.')
+                    cleaned_sentences = []
+                    for sentence in sentences:
+                        if lie.lower() not in sentence.lower():
+                            cleaned_sentences.append(sentence)
+                    response = '.'.join(cleaned_sentences).strip()
+                    if response and not response.endswith('.'):
+                        response += '.'
+        
+        # If response becomes too short after cleaning, provide honest alternative
+        if len(response) < 50:
+            response = "I understand your requirements. Let me gather more details to build the right solution for you."
         
         return response
     
@@ -284,6 +335,41 @@ Don't repeat existing information unless it's been clarified or quantified.
             "completeness": completeness,
             "category_breakdown": progress_result.get("category_breakdown", {})
         }
+    
+    def _detect_ready_to_build(self, message: str, progress_result: Dict, extracted_info: Dict, user_profile: Dict) -> bool:
+        """Intelligently detect when user is ready to start building"""
+        
+        # Check for explicit build trigger phrases
+        build_triggers = [
+            "start now", "begin", "build it", "lets go", "do it", "make it",
+            "start building", "get started", "let's begin", "go ahead",
+            "build this", "create this", "generate", "implement"
+        ]
+        
+        message_lower = message.lower()
+        has_build_trigger = any(trigger in message_lower for trigger in build_triggers)
+        
+        if not has_build_trigger:
+            return False
+            
+        # If they explicitly say to build, check if we have minimum requirements
+        
+        # High confidence: Good progress score
+        if progress_result["progress"] >= 85:
+            return True
+            
+        # Medium confidence: Comprehensive info detected by system
+        if progress_result.get("comprehensive_detected", False):
+            return True
+            
+        # Lower confidence but still valid: Have basic business info + problem + explicit request
+        has_business = bool(user_profile.get("business_type") or extracted_info.get("business_type"))
+        has_problem = bool(user_profile.get("main_problem") or extracted_info.get("specific_problem") or extracted_info.get("surface_problem"))
+        
+        if has_business and has_problem:
+            return True
+            
+        return False
     
     def _determine_phase(self, progress: int) -> str:
         """Determine phase based on progress"""

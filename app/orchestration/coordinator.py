@@ -41,6 +41,7 @@ class ApplicationGenerationCoordinator:
             "extracted_info": {},
             "requirements": {},
             "planned_components": {},  # Plans, not generated components
+            "generated_components": {},  # Initialize to prevent crashes
             "ready_for_generation": False,
             "preview_announced": False,
             # User profile and onboarding
@@ -61,8 +62,13 @@ class ApplicationGenerationCoordinator:
         
         # Start with onboarding instead of jumping into consultation
         if initial_message.strip():
-            # User said something - check if it looks like onboarding info
-            return await self.process_onboarding_message(session_id, initial_message)
+            # Check if this might be a returning user
+            existing_user = self._try_recognize_returning_user(initial_message)
+            if existing_user:
+                return await self._handle_returning_user(session_id, existing_user, initial_message)
+            else:
+                # New user - start onboarding
+                return await self.process_onboarding_message(session_id, initial_message)
         else:
             # No initial message - start onboarding
             welcome_msg = self.onboarding.get_welcome_message()
@@ -97,14 +103,33 @@ class ApplicationGenerationCoordinator:
         current_step = session.get("onboarding_step", OnboardingStep.NAME)
         profile = session.get("user_profile", {})
         
-        # Special case: if they're asking for help or seem confused during onboarding
-        if message.lower().strip() in ["help", "what", "huh", "?"]:
-            help_msg = f"""I'm MIOSA, your Business OS Agent. I build custom software for businesses.
+        # Special case: if they're asking for help or seem confused during onboarding  
+        confusion_indicators = ["help", "what", "huh", "?", "confused", "don't understand", "lost"]
+        frustration_indicators = ["wtf", "fuck", "stupid", "broken", "sucks", "hate", "annoying", "terrible"]
+        
+        message_lower = message.lower().strip()
+        
+        # Check for frustration first
+        if any(word in message_lower for word in frustration_indicators):
+            help_msg = f"""I understand this might be frustrating. Let me clarify - I need a few basic details to build custom software specifically for YOUR business.
 
-Right now I'm getting to know you so I can create something perfect for YOUR needs. 
+Currently, I need: {self._get_friendly_step_description(current_step)}
 
-{self.onboarding.get_current_question(current_step, profile)}"""
+For example, if {self._get_step_example(current_step)}"""
             
+        # Check for confusion
+        elif any(word in message_lower for word in confusion_indicators):
+            help_msg = f"""No problem! I'm MIOSA - I build custom business software. To create something perfect for you, I need to understand your business first.
+
+Right now I need: {self._get_friendly_step_description(current_step)}
+
+{self._get_step_example(current_step)}"""
+        else:
+            # Not confused or frustrated, process normally
+            help_msg = None
+            
+        # If we generated a help message, return it
+        if help_msg:
             session["messages"].append({
                 "role": "assistant",
                 "content": help_msg
@@ -144,6 +169,18 @@ Right now I'm getting to know you so I can create something perfect for YOUR nee
                 onboarding_complete=True
             )
             session["user_profile"] = user_profile.__dict__
+            
+            # CRITICAL FIX: Seed extracted_info with onboarding data
+            session["extracted_info"] = {
+                "business_type": profile.get("business_type", ""),
+                "business_name": profile.get("business_name", ""),
+                "team_size": profile.get("team_size", 1),
+                "surface_problem": profile.get("main_problem", ""),
+                "specific_problem": profile.get("main_problem", ""),
+                "user_ready": False
+            }
+            # Set initial progress from onboarding (not 0)
+            session["last_progress"] = 25  # Onboarding gives us 25% baseline
         
         # Add response to history
         session["messages"].append({
@@ -253,7 +290,7 @@ Right now I'm getting to know you so I can create something perfect for YOUR nee
         
         # Only trigger background planning (not building) when we have enough info
         try:
-            if result["phase"] in ("layer2", "layer3", "recommendation") and \
+            if result["phase"] in ("process_understanding", "impact_analysis", "requirements_gathering") and \
                self._has_enough_info_to_plan(session.get("extracted_info", {})) and \
                session.get("background_build", {}).get("status") in ("idle", "error"):
                 await self._trigger_background_planning(session_id, session["extracted_info"])
@@ -736,6 +773,121 @@ The application has been successfully generated with all requested features.
             return session
         
         return None
+    
+    def _try_recognize_returning_user(self, message: str) -> Optional[Dict]:
+        """Try to recognize if this is a returning user based on their message"""
+        try:
+            # Look for patterns that suggest returning user
+            message_lower = message.lower()
+            
+            # Direct recognition patterns
+            returning_patterns = [
+                "i'm back", "back again", "hello again", "hi again",
+                "remember me", "we talked before", "last time",
+                "continue", "where we left off"
+            ]
+            
+            if any(pattern in message_lower for pattern in returning_patterns):
+                # Try to extract name from message
+                words = message.split()
+                for i, word in enumerate(words):
+                    if word.lower() in ["i'm", "im", "my", "name", "called"]:
+                        if i + 1 < len(words):
+                            potential_name = words[i + 1].strip(",.!")
+                            user = self.session_manager.find_user_by_name(potential_name)
+                            if user:
+                                return user
+            
+            # Check if message contains an email address
+            import re
+            email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+            emails = re.findall(email_pattern, message)
+            if emails:
+                user = self.session_manager.load_user_profile_by_email(emails[0])
+                if user:
+                    return user
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error recognizing returning user: {e}")
+            return None
+    
+    async def _handle_returning_user(self, session_id: str, user_profile: Dict, initial_message: str) -> Dict:
+        """Handle a returning user with existing profile"""
+        try:
+            session = self.current_session
+            
+            # Set up session with existing user profile
+            session["user_profile"] = user_profile
+            session["onboarding_complete"] = True
+            session["phase"] = "consultation"
+            
+            user_name = user_profile.get("name", "")
+            business_name = user_profile.get("business_name", "")
+            
+            welcome_back_msg = f"""Welcome back, {user_name}! 
+
+I remember you - you run {business_name}, {user_profile.get('business_type', 'your business')}. Last time we were working on {user_profile.get('main_problem', 'improving your operations')}.
+
+{initial_message}
+
+Want to continue where we left off, or do you have a new challenge for me to solve?"""
+            
+            # Add messages to history
+            session["messages"].extend([
+                {
+                    "role": "user",
+                    "content": initial_message
+                },
+                {
+                    "role": "assistant", 
+                    "content": welcome_back_msg
+                }
+            ])
+            
+            # Save session
+            self.session_manager.save_session(session_id, session)
+            
+            return {
+                "session_id": session_id,
+                "response": welcome_back_msg,
+                "phase": "consultation",
+                "progress": 15,  # Start with some progress since we know them
+                "onboarding_complete": True,
+                "user_profile": user_profile,
+                "ready_for_generation": False,
+                "returning_user": True
+            }
+            
+        except Exception as e:
+            logger.error(f"Error handling returning user: {e}")
+            # Fall back to normal onboarding
+            return await self.process_onboarding_message(session_id, initial_message)
+    
+    def _get_friendly_step_description(self, step: OnboardingStep) -> str:
+        """Get user-friendly description of what we need"""
+        descriptions = {
+            OnboardingStep.NAME: "your actual name (not 'hey' or a greeting)",
+            OnboardingStep.EMAIL: "your email address",
+            OnboardingStep.BUSINESS_NAME: "the name of your business",
+            OnboardingStep.BUSINESS_TYPE: "what kind of business you run",
+            OnboardingStep.TEAM_SIZE: "how many people work with you",
+            OnboardingStep.MAIN_PROBLEM: "the main operational challenge you're facing"
+        }
+        return descriptions.get(step, "some information")
+    
+    def _get_step_example(self, step: OnboardingStep) -> str:
+        """Get helpful example for current step"""
+        examples = {
+            OnboardingStep.NAME: "your name is 'John' or 'Sarah', just type that",
+            OnboardingStep.EMAIL: "you'd type something like 'john@company.com'",
+            OnboardingStep.BUSINESS_NAME: "your company is called 'TechCorp', type 'TechCorp'",
+            OnboardingStep.BUSINESS_TYPE: "you run a 'Law Firm' or 'Marketing Agency', just tell me which",
+            OnboardingStep.TEAM_SIZE: "you have 5 people, just type '5' or '5 people'",
+            OnboardingStep.MAIN_PROBLEM: "you're struggling with 'managing client emails' or 'tracking inventory', describe it briefly"
+        }
+        return examples.get(step, "")
     
     def list_sessions(self) -> List[Dict]:
         """List all sessions from memory and storage"""
