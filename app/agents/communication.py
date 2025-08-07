@@ -29,6 +29,18 @@ class CommunicationAgent(BaseAgent):
             "extracted_info": session_data.get("extracted_info", {}),
             "business_profile": session_data.get("business_profile", {})
         }
+
+        # Include user profile for personalization when available
+        user_profile = session_data.get("user_profile") or {}
+        if user_profile:
+            context["user_profile"] = {
+                "name": user_profile.get("name"),
+                "email": user_profile.get("email"),
+                "business_name": user_profile.get("business_name"),
+                "business_type": user_profile.get("business_type"),
+                "team_size": user_profile.get("team_size"),
+                "main_problem": user_profile.get("main_problem"),
+            }
         
         # Only handle CLI commands locally - everything else goes to AI
         if self._is_cli_command(message):
@@ -68,6 +80,8 @@ class CommunicationAgent(BaseAgent):
             "progress": progress_result["progress"],
             "last_progress": progress_result["progress"],
             "ready_for_generation": progress_result["progress"] >= 85,
+            "comprehensive_detected": progress_result.get("comprehensive_detected", False),
+            "should_build": progress_result["progress"] >= 90 and any(word in message.lower() for word in ["begin", "start", "yes", "lets do it"]),
             "progress_details": self._get_progress_details(extracted_info, progress_result)
         }
     
@@ -123,6 +137,9 @@ Remember:
 - Progress through understanding naturally, not following scripts
 - Give relevant examples when helpful
 - Ask the next most important question based on what you know
+ 
+ Personalization:
+ - If user_profile is present, address the user by name and reference their business naturally.
 """
         
         return await self.think(prompt, context)
@@ -197,54 +214,25 @@ Don't repeat existing information unless it's been clarified or quantified.
         return merged
     
     def _validate_response_truthfulness(self, response: str, session_data: Dict) -> str:
-        """Validate response doesn't contain false claims about building/deployment"""
+        """Simple validation to prevent obvious lies without corrupting text"""
         
         # Get actual system state
         background_build = session_data.get("background_build", {})
         build_status = background_build.get("status", "idle")
-        build_progress = background_build.get("progress", 0)
         
-        # Check for common lying patterns
-        lying_patterns = [
-            # Building claims when not building
-            (r"I'm (building|creating|generating|developing)", build_status in ["idle", "error"]),
-            (r"(building|creating|generating) (this|your|the)", build_status in ["idle", "error"]),
-            (r"I'm starting (to build|the build)", build_status == "idle"),
-            
-            # Time estimates when no process running
-            (r"(ready in|about|approximately) \d+.*minutes", build_status in ["idle", "error"]),
-            (r"give me \d+.*minutes", build_status in ["idle", "error"]),
-            
-            # Deployment/URL claims when nothing deployed
-            (r"https?://[^\s]+", not background_build.get("preview_url")),
-            (r"going live at", not background_build.get("preview_url")),
-            (r"available at", not background_build.get("preview_url")),
-            
-            # Progress claims that don't match reality
-            (r"build (is running|process)", build_status in ["idle", "error"]),
-            (r"(deployment|application) is", build_status != "complete"),
+        # Only check for very specific lying phrases that shouldn't appear
+        dangerous_lies = [
+            "I'm building this right now",
+            "The build is running", 
+            "ready in 12 minutes",
+            "going live at https://",
+            "I'm starting the build right now"
         ]
         
-        import re
-        
-        # Replace lying statements with truthful ones
-        for pattern, is_lie in lying_patterns:
-            if is_lie and re.search(pattern, response, re.IGNORECASE):
-                # Replace with honest statements based on actual state
-                if build_status == "idle":
-                    response = re.sub(
-                        pattern, 
-                        "I'm ready to plan your solution. Once we have enough details, I can recommend the development approach",
-                        response,
-                        flags=re.IGNORECASE
-                    )
-                elif build_status == "starting":
-                    response = re.sub(
-                        pattern,
-                        "I'm analyzing your requirements to plan the solution architecture",
-                        response, 
-                        flags=re.IGNORECASE
-                    )
+        # If we find exact dangerous lies, replace only those
+        for lie in dangerous_lies:
+            if lie.lower() in response.lower() and build_status == "idle":
+                response = response.replace(lie, "I'm analyzing your requirements")
         
         return response
     

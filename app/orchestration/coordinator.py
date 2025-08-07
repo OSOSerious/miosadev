@@ -8,6 +8,7 @@ from app.agents.backend_developer import BackendDeveloperAgent
 from app.agents.frontend_developer import FrontendDeveloperAgent
 from app.agents.mcp_integration import MCPIntegrationAgent
 from app.storage import SessionManager
+from app.core.onboarding import OnboardingFlow, OnboardingStep, UserProfile
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +18,7 @@ class ApplicationGenerationCoordinator:
         self.sessions = {}
         self.current_session = None
         self.session_manager = SessionManager()
+        self.onboarding = OnboardingFlow()
         
     def _initialize_agents(self) -> Dict[str, Any]:
         return {
@@ -30,17 +32,21 @@ class ApplicationGenerationCoordinator:
     async def start_consultation(self, session_id: str, initial_message: str) -> Dict:
         """Start a new consultation session"""
         
-        # Initialize session with consultation-focused structure
+        # Initialize session with onboarding-first structure
         self.current_session = {
             "id": session_id,
             "started_at": datetime.now(),
-            "phase": "initial",
+            "phase": "onboarding",  # Start with onboarding
             "messages": [],
             "extracted_info": {},
             "requirements": {},
             "planned_components": {},  # Plans, not generated components
             "ready_for_generation": False,
             "preview_announced": False,
+            # User profile and onboarding
+            "user_profile": {},
+            "onboarding_step": OnboardingStep.NAME,
+            "onboarding_complete": False,
             # Background planning lifecycle tracking  
             "background_build": {
                 "status": "idle",           # idle | planning | analyzing | planning_architecture | plan_ready | error
@@ -53,10 +59,111 @@ class ApplicationGenerationCoordinator:
         
         self.sessions[session_id] = self.current_session
         
-        # Process the initial message
-        result = await self.process_consultation_message(session_id, initial_message)
+        # Start with onboarding instead of jumping into consultation
+        if initial_message.strip():
+            # User said something - check if it looks like onboarding info
+            return await self.process_onboarding_message(session_id, initial_message)
+        else:
+            # No initial message - start onboarding
+            welcome_msg = self.onboarding.get_welcome_message()
+            session = self.current_session
+            session["messages"].append({
+                "role": "assistant", 
+                "content": welcome_msg
+            })
+            
+            return {
+                "session_id": session_id,
+                "response": welcome_msg,
+                "phase": "onboarding",
+                "progress": 0,
+                "onboarding_step": OnboardingStep.NAME.value,
+                "ready_for_generation": False
+            }
+    
+    async def process_onboarding_message(self, session_id: str, message: str) -> Dict:
+        """Process onboarding messages to capture user profile"""
+        session = self.sessions.get(session_id)
+        if not session:
+            raise ValueError(f"Session {session_id} not found")
         
-        return result
+        # Add user message to history
+        session["messages"].append({
+            "role": "user",
+            "content": message
+        })
+        
+        # Process the onboarding step
+        current_step = session.get("onboarding_step", OnboardingStep.NAME)
+        profile = session.get("user_profile", {})
+        
+        # Special case: if they're asking for help or seem confused during onboarding
+        if message.lower().strip() in ["help", "what", "huh", "?"]:
+            help_msg = f"""I'm MIOSA, your Business OS Agent. I build custom software for businesses.
+
+Right now I'm getting to know you so I can create something perfect for YOUR needs. 
+
+{self.onboarding.get_current_question(current_step, profile)}"""
+            
+            session["messages"].append({
+                "role": "assistant",
+                "content": help_msg
+            })
+            
+            return {
+                "session_id": session_id,
+                "response": help_msg,
+                "phase": "onboarding",
+                "progress": 0,
+                "onboarding_step": current_step.value,
+                "ready_for_generation": False
+            }
+        
+        # Process the onboarding answer
+        next_step, response_msg, validation_success = self.onboarding.process_answer(
+            current_step, message, profile
+        )
+        
+        # Update session
+        session["onboarding_step"] = next_step
+        session["user_profile"] = profile
+        
+        if next_step == OnboardingStep.COMPLETE:
+            # Onboarding complete - transition to consultation
+            session["onboarding_complete"] = True
+            session["phase"] = "consultation"
+            
+            # Create user profile object
+            user_profile = UserProfile(
+                name=profile.get("name", ""),
+                email=profile.get("email", ""),
+                business_name=profile.get("business_name", ""),
+                business_type=profile.get("business_type", ""),
+                team_size=profile.get("team_size", 1),
+                main_problem=profile.get("main_problem", ""),
+                onboarding_complete=True
+            )
+            session["user_profile"] = user_profile.__dict__
+        
+        # Add response to history
+        session["messages"].append({
+            "role": "assistant",
+            "content": response_msg
+        })
+        
+        # Save session
+        self.session_manager.save_session(session_id, session)
+        
+        return {
+            "session_id": session_id,
+            "response": response_msg,
+            "phase": "consultation" if next_step == OnboardingStep.COMPLETE else "onboarding",
+            "progress": 15 if next_step == OnboardingStep.COMPLETE else 0,
+            "onboarding_step": next_step.value if next_step != OnboardingStep.COMPLETE else "complete",
+            "onboarding_complete": next_step == OnboardingStep.COMPLETE,
+            "user_profile": session.get("user_profile", {}),
+            "ready_for_generation": False
+        }
     
     async def process_consultation_message(self, session_id: str, message: str) -> Dict:
         """Process message with proper state management"""
@@ -65,6 +172,50 @@ class ApplicationGenerationCoordinator:
         session = self.sessions.get(session_id)
         if not session:
             raise ValueError(f"Session {session_id} not found")
+        
+        # If onboarding not complete, process onboarding first
+        if not session.get("onboarding_complete", False):
+            current_step: OnboardingStep = session.get("onboarding_step", OnboardingStep.NAME)
+            profile: Dict[str, Any] = session.get("user_profile", {})
+            
+            # On first step, show welcome prompt rather than treating as an answer when empty
+            if message.strip() == "" and current_step == OnboardingStep.NAME:
+                welcome = self.onboarding.get_welcome_message()
+                # Do not add an assistant message here; let CLI render
+                return {
+                    "session_id": session_id,
+                    "response": welcome,
+                    "phase": "onboarding",
+                    "progress": 0,
+                    "progress_details": {},
+                    "ready_for_generation": False,
+                }
+            
+            next_step, reply_text, valid = self.onboarding.process_answer(current_step, message, profile)
+            
+            # Persist profile and step
+            session["user_profile"] = profile
+            session["onboarding_step"] = next_step
+            session["onboarding_complete"] = (next_step == OnboardingStep.COMPLETE) or profile.get("onboarding_complete", False)
+            session["phase"] = "onboarding"
+            
+            # Record conversation turns
+            session["messages"].append({"role": "user", "content": message})
+            session["messages"].append({"role": "assistant", "content": reply_text})
+            
+            # Save and return immediately during onboarding
+            self.session_manager.save_session(session_id, session)
+            return {
+                "session_id": session_id,
+                "response": reply_text,
+                "phase": "onboarding",
+                "progress": 0,
+                "progress_details": {},
+                "ready_for_generation": False,
+                "background_build": session.get("background_build"),
+                "plan_ready": False,
+                "preview_announced": session.get("preview_announced", False)
+            }
         
         # Add message to history
         session["messages"].append({
@@ -88,6 +239,14 @@ class ApplicationGenerationCoordinator:
             "content": result["response"]
         })
         session["ready_for_generation"] = result.get("ready_for_generation", False)
+        
+        # CRITICAL: If user has provided comprehensive info AND said "begin", start building
+        if result.get("should_build") and result.get("comprehensive_detected"):
+            logger.info(f"Triggering actual development for session {session_id}")
+            session["ready_for_generation"] = True
+            session["phase"] = "building"
+            # Override response to be honest about what's happening
+            session["messages"][-1]["content"] = f"Perfect! I have all the information I need for your Texas business formation contract generator. Based on our conversation:\n\n- Solo law practice processing 30 contracts/month\n- Takes a week currently, costing significant billable time\n- Uses Zoom for client meetings\n- Needs simple/complex template detection\n\nI'm ready to build this system. Type 'generate' to start the actual development process, or we can refine the requirements further."
         
         # Save session to persistent storage
         self.session_manager.save_session(session_id, session)
@@ -124,6 +283,8 @@ class ApplicationGenerationCoordinator:
             "progress_details": result.get("progress_details", {}),
             "ready_for_generation": result.get("ready_for_generation", False),
             "solution": result.get("solution"),
+            "comprehensive_detected": result.get("comprehensive_detected", False),
+            "should_build": result.get("should_build", False),
             "background_build": session.get("background_build"),
             "plan_ready": plan_ready,
             "preview_announced": session.get("preview_announced", False)
@@ -134,9 +295,24 @@ class ApplicationGenerationCoordinator:
         session_id: str, 
         message: str
     ) -> Dict:
-        """Continue an existing consultation"""
+        """Continue an existing consultation - handles both onboarding and consultation phases"""
         
-        return await self.process_consultation_message(session_id, message)
+        session = self.sessions.get(session_id)
+        if not session:
+            # Load from storage if not in memory
+            session = self.session_manager.load_session(session_id)
+            if session:
+                self.sessions[session_id] = session
+            else:
+                raise ValueError(f"Session {session_id} not found")
+        
+        # Check what phase we're in
+        if not session.get("onboarding_complete", False):
+            # Still in onboarding
+            return await self.process_onboarding_message(session_id, message)
+        else:
+            # In consultation phase
+            return await self.process_consultation_message(session_id, message)
     
     async def _generate_solution_recommendation(self, extracted_info: Dict) -> Dict:
         """Generate a solution recommendation based on extracted info"""

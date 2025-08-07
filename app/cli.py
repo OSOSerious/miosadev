@@ -53,8 +53,8 @@ class MiosaCLI:
         """Start the CLI chat interface"""
         self._show_welcome()
         
-        # Start initial consultation
-        console.print("\n[bold cyan]Hi! I'm MIOSA. What's the biggest time-waster in your business right now?[/bold cyan]\n")
+        # Start onboarding-first prompt
+        console.print("\n[bold cyan]I'm MIOSA. First, what's your name?[/bold cyan]\n")
         
         # Main chat loop
         while True:
@@ -122,7 +122,7 @@ class MiosaCLI:
                         message
                     )
                 else:
-                    # Continue consultation - no phase parameter needed
+                    # Continue consultation - onboarding-aware
                     result = await self.coordinator.continue_consultation(
                         self.session_id,
                         message
@@ -265,11 +265,11 @@ class MiosaCLI:
         """Display welcome message"""
         console.clear()
         
-        panel = Panel.fit(
-            """[bold cyan]🤖 MIOSA - Business OS Agent[/bold cyan]
+        # Personalized header based on session/user_profile when available
+        header_text = """[bold cyan]🤖 MIOSA - Your Personal Business OS Agent[/bold cyan]
             
-I build custom business software while we talk.
-Just tell me what's broken in your business and I'll build the solution.
+I build custom software that runs YOUR business exactly how you want.
+No templates. No generic solutions. Just your perfect system.
 
 [yellow]Commands:[/yellow]
 • [green]generate[/green] - Start building your application  
@@ -278,10 +278,8 @@ Just tell me what's broken in your business and I'll build the solution.
 • [green]help[/green]     - Show available commands
 • [green]exit[/green]     - Exit MIOSA
 
-[bold]What operational nightmare is slowing down your business growth?[/bold]""",
-            border_style="cyan",
-            padding=(1, 2)
-        )
+[bold]Let's start with a quick introduction so I can build something perfect for your needs.[/bold]"""
+        panel = Panel.fit(header_text, border_style="cyan", padding=(1, 2))
         console.print(panel)
     
     def _show_goodbye(self):
@@ -359,22 +357,34 @@ Just tell me what's broken in your business and I'll build the solution.
         phase = result.get('phase', 'initial')
         progress_details = result.get('progress_details', {})
         
+        # Get user profile for personalization
+        user_profile = result.get('user_profile', {})
+        user_name = user_profile.get('name', '')
+        business_name = user_profile.get('business_name', '')
+        
         # Create better progress bar
         bar = self._create_progress_bar(progress)
         
-        # Phase description
+        # Phase description with personalization
         phase_descriptions = {
+            'onboarding': f'👋 Getting to know {user_name}' if user_name else '👋 Introduction',
+            'consultation': f'🔍 Understanding {business_name}' if business_name else '🔍 Understanding your business',
             'initial': '🚀 Getting started',
             'problem_discovery': '🔍 Understanding your challenge',
             'process_understanding': '⚙️ Learning your workflow',
             'impact_analysis': '📊 Analyzing business impact',
             'requirements_gathering': '📝 Finalizing requirements',
+            'building': '🏗️ Building your solution',
             'ready_to_build': '✨ Ready to build!'
         }
         
         phase_desc = phase_descriptions.get(phase, phase.title())
         
-        console.print(f"Progress: {bar} {progress}% - {phase_desc}")
+        # Show personalized progress
+        if user_name and business_name:
+            console.print(f"Progress: {bar} {progress}% - {phase_desc}")
+        else:
+            console.print(f"Progress: {bar} {progress}% - {phase_desc}")
         
         # Show what we know and what we need
         if progress_details:
@@ -385,6 +395,20 @@ Just tell me what's broken in your business and I'll build the solution.
                 console.print(f"[dim]✓ Known: {', '.join(known)}")
             if needed and needed[0] != "Ready to build!":
                 console.print(f"[dim]⚠ Need: {', '.join(needed)}")
+        
+        # Show onboarding step if in onboarding
+        onboarding_step = result.get('onboarding_step')
+        if onboarding_step and onboarding_step != 'complete':
+            step_names = {
+                'name': 'Getting your name',
+                'email': 'Getting your email',
+                'business_name': 'Getting your business name',
+                'business_type': 'Understanding your business type',
+                'team_size': 'Learning about your team',
+                'main_problem': 'Understanding your main challenge'
+            }
+            step_desc = step_names.get(onboarding_step, onboarding_step)
+            console.print(f"[dim]📋 Step: {step_desc}")
         
         console.print()  # Extra line for spacing
     
