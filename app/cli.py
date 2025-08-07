@@ -42,13 +42,19 @@ class MiosaCLI:
         self.style = Style.from_dict({
             '': '#00aa00 bold',
         })
+        # Token tracking
+        self.metrics = {
+            "calls": 0,
+            "tokens": 0,
+            "cost": 0.0
+        }
         
     async def start(self):
         """Start the CLI chat interface"""
         self._show_welcome()
         
         # Start initial consultation
-        console.print("\n[yellow]Let me help you build your application. Tell me about what you want to create.[/yellow]\n")
+        console.print("\n[bold cyan]Hi! I'm MIOSA. What's the biggest time-waster in your business right now?[/bold cyan]\n")
         
         # Main chat loop
         while True:
@@ -67,6 +73,10 @@ class MiosaCLI:
                 
                 if user_input.lower() == 'status':
                     self._show_status()
+                    continue
+                
+                if user_input.lower() == 'metrics':
+                    self._show_metrics()
                     continue
                 
                 if user_input.lower() == 'generate':
@@ -121,12 +131,20 @@ class MiosaCLI:
                 # Update phase from result
                 self.current_phase = result.get("phase", self.current_phase)
                 
+                # Update metrics (mock for now - in real implementation, get from LLM service)
+                self.metrics["calls"] += 1
+                self.metrics["tokens"] += len(message.split()) * 10  # Rough estimate
+                self.metrics["cost"] += 0.001  # Rough estimate
+                
             except Exception as e:
                 console.print(f"[red]Error processing message: {e}[/red]")
                 return
         
         # Display response
         console.print(f"\n🤖 [bold cyan]MIOSA:[/bold cyan] {result.get('response', 'I understand. Let me help you with that.')}\n")
+        
+        # Show detailed progress
+        self._show_detailed_progress(result)
         
         # Show solution if provided
         if result.get('solution'):
@@ -140,11 +158,7 @@ class MiosaCLI:
             console.print(f"[cyan]Impact:[/cyan] {solution.get('estimated_impact')}")
             console.print("="*50 + "\n")
         
-        # Show progress with actual percentage
-        if 'progress' in result:
-            self._show_progress_bar(result['progress'])
-        else:
-            self._show_progress_bar()
+        # Progress is now handled in _show_detailed_progress
         
         # Check if ready to generate
         if result.get('ready_for_generation'):
@@ -252,18 +266,19 @@ class MiosaCLI:
         console.clear()
         
         panel = Panel.fit(
-            """[bold cyan]🤖 MIOSA - AI Application Generation Platform[/bold cyan]
+            """[bold cyan]🤖 MIOSA - Business OS Agent[/bold cyan]
             
-Build complete applications through natural conversation.
-I'll help you design databases, create APIs, build UIs, and deploy everything.
+I build custom business software while we talk.
+Just tell me what's broken in your business and I'll build the solution.
 
 [yellow]Commands:[/yellow]
-• [green]generate[/green] - Generate application (when ready)
+• [green]generate[/green] - Start building your application  
 • [green]status[/green]   - Show current progress
-• [green]help[/green]     - Show help
-• [green]exit[/green]     - Exit the program
+• [green]metrics[/green]  - Show token usage and costs
+• [green]help[/green]     - Show available commands
+• [green]exit[/green]     - Exit MIOSA
 
-[dim]Let's build something amazing together![/dim]""",
+[bold]What operational nightmare is slowing down your business growth?[/bold]""",
             border_style="cyan",
             padding=(1, 2)
         )
@@ -280,25 +295,25 @@ I'll help you design databases, create APIs, build UIs, and deploy everything.
 [bold cyan]MIOSA Help[/bold cyan]
 
 [yellow]How to use:[/yellow]
-1. Describe your application in natural language
-2. Answer my questions to clarify requirements
-3. Type 'generate' when ready to build
+1. Tell me what's broken in your business
+2. I'll ask follow-up questions to understand your needs
+3. Type 'generate' when ready to build your solution
 
-[yellow]Consultation Phases:[/yellow]
-• [cyan]Initial[/cyan] - Understanding your business needs
-• [cyan]Layer 1[/cyan] - Exploring features and functionality
-• [cyan]Layer 2[/cyan] - Technical requirements and integrations
-• [cyan]Layer 3[/cyan] - Finalizing architecture
-• [cyan]Complete[/cyan] - Ready to generate
+[yellow]Commands:[/yellow]
+• [green]generate[/green] - Start building (when consultation complete)
+• [green]status[/green]   - Show consultation progress  
+• [green]metrics[/green]  - Show token usage and costs
+• [green]help[/green]     - Show this help
+• [green]exit[/green]     - Exit MIOSA
 
-[yellow]What I can build:[/yellow]
-• Web applications (React, Vue, Angular)
-• REST APIs (FastAPI, Flask, Express)
-• Databases (PostgreSQL, MySQL, MongoDB)
-• Integrations (Notion, Slack, Google, etc.)
-• Deployment configs (Docker, Kubernetes)
+[yellow]What I build:[/yellow]
+• Custom CRMs that match how you sell
+• Automated workflows that eliminate manual work
+• Real-time dashboards that show what matters
+• Customer portals that reduce support tickets
+• Integration systems that connect your tools
 
-[dim]Just chat naturally - I'll guide you through the process![/dim]
+[bold]Just tell me what's slowing down your business![/bold]
 """
         console.print(Panel(help_text, border_style="yellow", title="Help"))
     
@@ -318,6 +333,72 @@ I'll help you design databases, create APIs, build UIs, and deploy everything.
         status_table.add_row("Ready to Generate", "✅ Yes" if self.current_phase == "complete" else "❌ Not yet")
         
         console.print(status_table)
+        
+        # Show quick metrics
+        console.print(f"\n[dim]💡 {self.metrics['calls']} calls • {self.metrics['tokens']} tokens • ${self.metrics['cost']:.3f}[/dim]")
+    
+    def _show_metrics(self):
+        """Display token usage metrics"""
+        metrics_table = Table(title="Token Usage Metrics", show_header=True, header_style="bold cyan")
+        metrics_table.add_column("Metric", style="cyan")
+        metrics_table.add_column("Value", style="white")
+        
+        metrics_table.add_row("API Calls", str(self.metrics["calls"]))
+        metrics_table.add_row("Tokens Used", f"{self.metrics['tokens']:,}")
+        metrics_table.add_row("Estimated Cost", f"${self.metrics['cost']:.4f}")
+        
+        if self.metrics["calls"] > 0:
+            avg_tokens = self.metrics["tokens"] / self.metrics["calls"]
+            metrics_table.add_row("Avg Tokens/Call", f"{avg_tokens:.0f}")
+        
+        console.print(metrics_table)
+    
+    def _show_detailed_progress(self, result: Dict[str, Any]):
+        """Show enhanced progress with details"""
+        progress = result.get('progress', 0)
+        phase = result.get('phase', 'initial')
+        progress_details = result.get('progress_details', {})
+        
+        # Create better progress bar
+        bar = self._create_progress_bar(progress)
+        
+        # Phase description
+        phase_descriptions = {
+            'initial': '🚀 Getting started',
+            'problem_discovery': '🔍 Understanding your challenge',
+            'process_understanding': '⚙️ Learning your workflow',
+            'impact_analysis': '📊 Analyzing business impact',
+            'requirements_gathering': '📝 Finalizing requirements',
+            'ready_to_build': '✨ Ready to build!'
+        }
+        
+        phase_desc = phase_descriptions.get(phase, phase.title())
+        
+        console.print(f"Progress: {bar} {progress}% - {phase_desc}")
+        
+        # Show what we know and what we need
+        if progress_details:
+            known = progress_details.get('known', [])
+            needed = progress_details.get('needed', [])
+            
+            if known:
+                console.print(f"[dim]✓ Known: {', '.join(known)}")
+            if needed and needed[0] != "Ready to build!":
+                console.print(f"[dim]⚠ Need: {', '.join(needed)}")
+        
+        console.print()  # Extra line for spacing
+    
+    def _create_progress_bar(self, percentage: int, width: int = 25) -> str:
+        """Create a better looking progress bar"""
+        filled = int((percentage / 100) * width)
+        empty = width - filled
+        
+        # Use better characters
+        filled_char = '█'
+        empty_char = '░'
+        
+        bar = f"[{filled_char * filled}{empty_char * empty}]"
+        return bar
     
     def _show_progress_bar(self, progress_value: Optional[int] = None):
         """Show consultation progress"""

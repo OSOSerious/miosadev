@@ -38,12 +38,12 @@ class ApplicationGenerationCoordinator:
             "messages": [],
             "extracted_info": {},
             "requirements": {},
-            "generated_components": {},
+            "planned_components": {},  # Plans, not generated components
             "ready_for_generation": False,
             "preview_announced": False,
-            # Background build lifecycle tracking
+            # Background planning lifecycle tracking  
             "background_build": {
-                "status": "idle",           # idle | starting | scaffolding | generating | complete | error
+                "status": "idle",           # idle | planning | analyzing | planning_architecture | plan_ready | error
                 "progress": 0,                # 0-100
                 "error": None,
                 "preview_url": None,
@@ -82,6 +82,7 @@ class ApplicationGenerationCoordinator:
         # Update session with new info
         session["phase"] = result["phase"]
         session["extracted_info"] = result["extracted_info"]
+        session["last_progress"] = result.get("last_progress", 0)  # Store for progress smoothing
         session["messages"].append({
             "role": "assistant",
             "content": result["response"]
@@ -91,12 +92,12 @@ class ApplicationGenerationCoordinator:
         # Save session to persistent storage
         self.session_manager.save_session(session_id, session)
         
-        # If we have enough info by layer2, trigger a background build (non-blocking)
+        # Only trigger background planning (not building) when we have enough info
         try:
             if result["phase"] in ("layer2", "layer3", "recommendation") and \
-               self._has_enough_info_to_build(session.get("extracted_info", {})) and \
+               self._has_enough_info_to_plan(session.get("extracted_info", {})) and \
                session.get("background_build", {}).get("status") in ("idle", "error"):
-                await self._trigger_background_build(session_id, session["extracted_info"])
+                await self._trigger_background_planning(session_id, session["extracted_info"])
         except Exception as e:
             # Don't break the consultation on background failures
             session["background_build"]["status"] = "error"
@@ -109,9 +110,9 @@ class ApplicationGenerationCoordinator:
             solution = await self._generate_solution_recommendation(result["extracted_info"])
             result["solution"] = solution
         
-        # Determine preview readiness and set announcement flag once
-        preview_ready = session.get("background_build", {}).get("status") == "complete"
-        if preview_ready and not session.get("preview_announced"):
+        # Determine plan readiness and set announcement flag once
+        plan_ready = session.get("background_build", {}).get("status") == "plan_ready"
+        if plan_ready and not session.get("preview_announced"):
             session["preview_announced"] = True
             self.session_manager.save_session(session_id, session)
 
@@ -120,10 +121,11 @@ class ApplicationGenerationCoordinator:
             "response": result["response"],
             "phase": result["phase"],
             "progress": result["progress"],
+            "progress_details": result.get("progress_details", {}),
             "ready_for_generation": result.get("ready_for_generation", False),
             "solution": result.get("solution"),
             "background_build": session.get("background_build"),
-            "preview_ready": preview_ready,
+            "plan_ready": plan_ready,
             "preview_announced": session.get("preview_announced", False)
         }
     
@@ -295,8 +297,8 @@ class ApplicationGenerationCoordinator:
             "framework": requirements.get("frontend_framework", "react")
         })
 
-    def _has_enough_info_to_build(self, info: Dict) -> bool:
-        """Heuristics to start background scaffolding around layer2."""
+    def _has_enough_info_to_plan(self, info: Dict) -> bool:
+        """Heuristics to start background planning around layer2."""
         if not info:
             return False
         # Common fields extracted by CommunicationAgent
@@ -306,78 +308,64 @@ class ApplicationGenerationCoordinator:
         has_impact = bool(info.get("time_spent") or info.get("growth_impact") or info.get("quantified_impact"))
         return has_problem and has_process and has_impact
 
-    async def _trigger_background_build(self, session_id: str, info: Dict) -> None:
-        """Mark session and spawn a non-blocking background build task."""
+    async def _trigger_background_planning(self, session_id: str, info: Dict) -> None:
+        """Mark session and spawn a non-blocking background planning task."""
         session = self.sessions.get(session_id)
         if not session:
             return
-        session["background_build"]["status"] = "starting"
+        session["background_build"]["status"] = "planning"
         session["background_build"]["progress"] = 5
         session["background_build"]["error"] = None
         session["background_build"]["last_update"] = datetime.now().isoformat()
         self.session_manager.save_session(session_id, session)
 
-        # Fire-and-forget background task
-        asyncio.create_task(self._run_background_build(session_id))
+        # Fire-and-forget background task for planning only
+        asyncio.create_task(self._run_background_planning(session_id))
 
-    async def _run_background_build(self, session_id: str) -> None:
-        """Progressively generate components without blocking the consultation."""
+    async def _run_background_planning(self, session_id: str) -> None:
+        """Progressively plan solution architecture without blocking the consultation."""
         session = self.sessions.get(session_id)
         if not session:
             return
         try:
-            session["background_build"]["status"] = "scaffolding"
+            session["background_build"]["status"] = "analyzing"
             session["background_build"]["progress"] = 15
             session["background_build"]["last_update"] = datetime.now().isoformat()
             self.session_manager.save_session(session_id, session)
 
-            # Derive minimal requirements from extracted_info
+            # Derive minimal requirements from extracted_info (planning only)
             requirements = await self._extract_requirements(session)
             session["requirements"] = requirements
-            session["background_build"]["progress"] = 25
+            session["background_build"]["progress"] = 30
+            session["background_build"]["status"] = "planning_architecture"
             self.session_manager.save_session(session_id, session)
 
-            # Identify integrations early
+            # Identify integrations needed
             integrations = await self._identify_integrations(session)
             session["integrations"] = integrations
-            session["background_build"]["progress"] = 35
+            session["background_build"]["progress"] = 50
             self.session_manager.save_session(session_id, session)
 
-            # Database design
-            database = await self._design_database(requirements)
-            session["generated_components"]["database"] = database
-            session["background_build"]["progress"] = 55
-            session["background_build"]["status"] = "generating"
+            # Plan database structure (no actual generation)
+            database_plan = await self._plan_database(requirements)
+            session["planned_components"]["database"] = database_plan
+            session["background_build"]["progress"] = 70
             self.session_manager.save_session(session_id, session)
 
-            # Backend generation
-            backend = await self._generate_backend(
-                database,
-                requirements,
-                integrations
-            )
-            session["generated_components"]["backend"] = backend
-            session["background_build"]["progress"] = 75
+            # Plan backend architecture (no code generation)
+            backend_plan = await self._plan_backend(requirements, integrations)
+            session["planned_components"]["backend"] = backend_plan
+            session["background_build"]["progress"] = 85
             self.session_manager.save_session(session_id, session)
 
-            # Frontend generation (basic scaffolding)
-            frontend = await self._generate_frontend(
-                backend,
-                requirements,
-                session.get("extracted_info", {}).get("design_preferences", {})
-            )
-            session["generated_components"]["frontend"] = frontend
-            session["background_build"]["progress"] = 90
-            self.session_manager.save_session(session_id, session)
-
-            # Optionally: prepare deployment artifacts (lightweight)
-            deployment = await self._prepare_deployment(session)
-            session["generated_components"]["deployment"] = deployment
+            # Plan frontend approach
+            frontend_plan = await self._plan_frontend(requirements)
+            session["planned_components"]["frontend"] = frontend_plan
             session["background_build"]["progress"] = 100
-            session["background_build"]["status"] = "complete"
+            session["background_build"]["status"] = "plan_ready"
             session["background_build"]["last_update"] = datetime.now().isoformat()
 
-            # Optional preview URL stub (integrate with live preview system later)
+            # No preview URL - this is just planning
             session["background_build"]["preview_url"] = None
             
             self.session_manager.save_session(session_id, session)
@@ -391,15 +379,41 @@ class ApplicationGenerationCoordinator:
                 self.session_manager.save_session(session_id, session)
 
     def get_build_status(self, session_id: str) -> Dict:
-        """Lightweight accessor for background build status for use by API layer or UI polling."""
+        """Lightweight accessor for background planning status for use by API layer or UI polling."""
         session = self.sessions.get(session_id)
         if not session:
             raise ValueError(f"Session {session_id} not found")
         return {
             "session_id": session_id,
             "background_build": session.get("background_build", {}),
-            "preview_ready": session.get("background_build", {}).get("status") == "complete",
+            "plan_ready": session.get("background_build", {}).get("status") == "plan_ready",
             "preview_announced": session.get("preview_announced", False)
+        }
+    
+    async def _plan_database(self, requirements: Dict) -> Dict:
+        """Plan database structure without generating actual schema"""
+        return {
+            "planned_tables": ["users", "projects", "tasks"],
+            "database_type": "PostgreSQL",
+            "approach": "Relational database with normalized structure"
+        }
+    
+    async def _plan_backend(self, requirements: Dict, integrations: List) -> Dict:
+        """Plan backend architecture without generating code"""
+        return {
+            "framework": "FastAPI",
+            "architecture": "REST API with authentication",
+            "planned_endpoints": ["/api/users", "/api/projects", "/api/tasks"],
+            "integrations_needed": len(integrations)
+        }
+    
+    async def _plan_frontend(self, requirements: Dict) -> Dict:
+        """Plan frontend approach without generating components"""
+        return {
+            "framework": "React",
+            "architecture": "SPA with routing", 
+            "planned_pages": ["Dashboard", "Projects", "Settings"],
+            "ui_library": "Material-UI"
         }
     
     async def _prepare_deployment(self, session: Dict) -> Dict:
