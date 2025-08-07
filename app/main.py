@@ -24,11 +24,10 @@ coordinator = ApplicationGenerationCoordinator()
 async def lifespan(app: FastAPI):
     logger.info(f"Starting MIOSA Application Generation Platform v{settings.VERSION}")
     
-    from app.core.ai.groq_service import GroqService
-    groq = GroqService()
-    groq_health = await groq.check_health()
+    from app.core.ai.groq_service import groq_service
+    groq_health = await groq_service.check_health()
     if groq_health:
-        logger.info("Groq service is healthy")
+        logger.info("Groq service (with Kimi K2) is healthy")
     else:
         logger.warning("Groq service health check failed")
     

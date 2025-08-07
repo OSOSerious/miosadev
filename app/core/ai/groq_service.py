@@ -3,14 +3,105 @@ from groq import AsyncGroq
 from typing import Optional, Dict, List, Any
 from app.core.config import settings
 import logging
+import time
+
 
 logger = logging.getLogger(__name__)
+
+class _TokenTracker:
+    """Lightweight session token/cost tracker with console display."""
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.call_count = 0
+        self.total_input_tokens = 0
+        self.total_output_tokens = 0
+        self.total_cost = 0.0
+        self.calls: List[Dict[str, Any]] = []
+
+    def estimate_tokens(self, text: Optional[str]) -> int:
+        if not text:
+            return 0
+        # Rough heuristic ~4 chars/token
+        return max(1, int(len(text) / 4))
+
+    def _model_cost(self, model: str, input_tokens: int, output_tokens: int) -> float:
+        """Very rough cost estimate mapping; adjust as needed for your pricing."""
+        # USD per 1k tokens (input, output)
+        pricing = {
+            # Ballpark placeholders; replace with actual Groq pricing if available
+            "llama-3.1-8b-instant": (0.05, 0.08),
+            "llama-3.2-3b-preview": (0.02, 0.03),
+            "llama-3.2-11b-vision-preview": (0.10, 0.12),
+            "llama-3.2-90b-vision-preview": (0.60, 0.80),
+            "gemma2-9b-it": (0.06, 0.08),
+            "llama3-groq-8b-8192-tool-use-preview": (0.08, 0.10),
+            "llama3-groq-70b-8192-tool-use-preview": (0.50, 0.70),
+        }
+        inp_k, out_k = pricing.get(model, (0.05, 0.08))
+        return (input_tokens / 1000.0) * inp_k + (output_tokens / 1000.0) * out_k
+
+    def track(self, model: str, prompt: str, output: Optional[str], ok: bool, started: float, error: Optional[Exception] = None) -> Dict[str, Any]:
+        self.call_count += 1
+        input_tokens = self.estimate_tokens(prompt)
+        output_tokens = self.estimate_tokens(output)
+        cost = self._model_cost(model, input_tokens, output_tokens)
+        self.total_input_tokens += input_tokens
+        self.total_output_tokens += output_tokens
+        self.total_cost += cost
+        metrics = {
+            "call_number": self.call_count,
+            "model": model,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cost": cost,
+            "success": ok,
+            "duration_ms": int((time.time() - started) * 1000),
+            "timestamp": time.time(),
+        }
+        self.calls.append(metrics)
+        self._display(metrics)
+        return metrics
+
+    def _display(self, m: Dict[str, Any]):
+        try:
+            logger.info(
+                "\n" +
+                "┌──────────────────────────────────────────────┐\n"
+                f"│ 🔄 LLM Call #{m['call_number']:<3}                           │\n"
+                "├──────────────────────────────────────────────┤\n"
+                f"│ Model: {m['model']:<35}│\n"
+                f"│ Input: {m['input_tokens']:<5} tokens                         │\n"
+                f"│ Output: {m['output_tokens']:<5} tokens                        │\n"
+                f"│ Cost: ${m['cost']:.5f}                              │\n"
+                f"│ Status: {'✅ Success' if m['success'] else '❌ Failed':<29}│\n"
+                f"│ Duration: {m['duration_ms']} ms                         │\n"
+                "├──────────────────────────────────────────────┤\n"
+                f"│ Session Total:                                     │\n"
+                f"│ Calls: {self.call_count:<3} | Tokens: {self.total_input_tokens + self.total_output_tokens:<6}          │\n"
+                f"│ Cost: ${self.total_cost:.4f}                               │\n"
+                "└──────────────────────────────────────────────┘\n"
+            )
+        except Exception:
+            pass
+
+    def session_metrics(self) -> Dict[str, Any]:
+        total_tokens = self.total_input_tokens + self.total_output_tokens
+        avg_tokens = int(total_tokens / self.call_count) if self.call_count else 0
+        return {
+            "calls": self.call_count,
+            "tokens": total_tokens,
+            "cost": self.total_cost,
+            "avgTokensPerCall": avg_tokens,
+        }
 
 class GroqService:
     """Main Groq service for AI operations with fallback models"""
     
     # Updated list of available models on Groq (Dec 2024)
     AVAILABLE_MODELS = [
+        "moonshotai/kimi-k2-instruct",  # Kimi K2 - Primary model
         "llama-3.1-8b-instant",     # Fast and reliable
         "llama-3.2-3b-preview",      # Smallest, fastest
         "llama-3.2-11b-vision-preview",  # Mid-size
@@ -31,10 +122,10 @@ class GroqService:
         
         # Map old model names to new ones
         model_mapping = {
-            "mixtral-8x7b-32768": "llama-3.1-8b-instant",
-            "llama3-8b-8192": "llama-3.1-8b-instant",
-            "llama3-70b-8192": "llama-3.2-90b-vision-preview",
-            "llama-3.3-70b-versatile": "llama-3.2-90b-vision-preview",
+            "mixtral-8x7b-32768": "moonshotai/kimi-k2-instruct",
+            "llama3-8b-8192": "moonshotai/kimi-k2-instruct",
+            "llama3-70b-8192": "moonshotai/kimi-k2-instruct",
+            "llama-3.3-70b-versatile": "moonshotai/kimi-k2-instruct",
         }
         
         # Use mapped model if old model configured
@@ -48,6 +139,7 @@ class GroqService:
             logger.warning(f"Model {configured_model} not available, using {self.model}")
             
         logger.info(f"Using Groq model: {self.model}")
+        self._tracker = _TokenTracker()
     
     async def complete(self, prompt: str, response_format: Optional[Dict] = None) -> str:
         """Generate completion from prompt with automatic fallback"""
@@ -58,6 +150,7 @@ class GroqService:
         
         for model in models_to_try:
             try:
+                started = time.time()
                 kwargs = {
                     "model": model,
                     "messages": messages,
@@ -75,6 +168,7 @@ class GroqService:
                     content = response.choices[0].message.content
                     if content:
                         logger.debug(f"Successfully used model: {model}")
+                        self._tracker.track(model, prompt, content, True, started)
                         return content
                     
             except Exception as e:
@@ -88,12 +182,14 @@ class GroqService:
                 elif "does not support response_format" in error_msg:
                     # Try without response_format
                     try:
+                        started = time.time()
                         kwargs.pop("response_format", None)
                         response = await self.client.chat.completions.create(**kwargs)
                         if response.choices and response.choices[0].message:
                             content = response.choices[0].message.content
                             if content:
                                 logger.debug(f"Successfully used model {model} without response_format")
+                                self._tracker.track(model, prompt, content, True, started)
                                 return content
                     except Exception as e2:
                         logger.error(f"Error with model {model} (retry): {e2}")
@@ -143,6 +239,7 @@ class GroqService:
         
         for model in models_to_try:
             try:
+                started = time.time()
                 response = await self.client.chat.completions.create(
                     model=model,
                     messages=messages,
@@ -156,6 +253,9 @@ class GroqService:
                     content = response.choices[0].message.content
                     if content:
                         logger.debug(f"Successfully used model: {model}")
+                        # Track using concatenated user content as prompt estimate
+                        joined_prompt = "\n".join(m.get("content", "") for m in messages)
+                        self._tracker.track(model, joined_prompt, content, True, started)
                         return content.strip()
                     
             except Exception as e:
@@ -171,6 +271,13 @@ class GroqService:
                     continue
         
         raise Exception("All Groq models are currently unavailable. Please try again later.")
+
+    # ========== Metrics API ==========
+    def get_session_metrics(self) -> Dict[str, Any]:
+        return self._tracker.session_metrics()
+
+    def reset_session_metrics(self) -> None:
+        self._tracker.reset()
 
 # Singleton instance for backward compatibility
 groq_service = GroqService()

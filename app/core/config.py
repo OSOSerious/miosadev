@@ -35,9 +35,13 @@ class Settings(BaseSettings):
     def REDIS_URL(self) -> str:
         return f"redis://{self.REDIS_HOST}:{self.REDIS_PORT}"
     
-    # Groq API (Latest SDK v0.30.0)
+    # Groq API (with Kimi K2 support)
     GROQ_API_KEY: str = Field(..., validation_alias="GROQ_API_KEY")
-    GROQ_MODEL: str = Field(default="moonshotai/kimi-k2-instruct")  # Default to Kimi K2
+    GROQ_MODEL: str = Field(default="moonshotai/kimi-k2-instruct")  # Kimi K2 through Groq
+    
+    # Moonshot AI API (optional - not needed for Kimi through Groq)
+    MOONSHOT_API_KEY: Optional[str] = Field(default=None, validation_alias="MOONSHOT_API_KEY")
+    MOONSHOT_MODEL: str = Field(default="kimi-k2-instruct")
     
     # Frontend
     FRONTEND_URL: str = Field(default="http://localhost:5173")
