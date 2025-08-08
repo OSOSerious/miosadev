@@ -20,15 +20,12 @@ try:
     from rich.progress import Progress, SpinnerColumn, TextColumn
     from rich.table import Table
 except ImportError:
-    print("Missing required packages. Installing...")
-    import subprocess
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "prompt-toolkit", "rich", "nest-asyncio"])
-    from prompt_toolkit import prompt
-    from prompt_toolkit.styles import Style
-    from rich.console import Console
-    from rich.panel import Panel
-    from rich.progress import Progress, SpinnerColumn, TextColumn
-    from rich.table import Table
+    print(
+        "Missing required packages. Please install dependencies first: \n"
+        "    pip install -r requirements.txt\n"
+        "Or manually: pip install prompt-toolkit rich nest-asyncio\n"
+    )
+    raise SystemExit(1)
 
 from app.orchestration.coordinator import ApplicationGenerationCoordinator
 
@@ -137,10 +134,10 @@ class MiosaCLI:
                 # Update phase from result
                 self.current_phase = result.get("phase", self.current_phase)
                 
-                # Update metrics (mock for now - in real implementation, get from LLM service)
+                # Update metrics (rough estimates; replace with actual LLM metrics when connected)
                 self.metrics["calls"] += 1
                 self.metrics["tokens"] += len(message.split()) * 10  # Rough estimate
-                self.metrics["cost"] += 0.001  # Rough estimate
+                self.metrics["cost"] += 0.001  # Rough per-call estimate
                 
             except Exception as e:
                 console.print(f"[red]Error processing message: {e}[/red]")

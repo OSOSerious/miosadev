@@ -222,6 +222,19 @@ Don't repeat existing information unless it's been clarified or quantified.
         """Intelligently merge information, prioritizing more specific data"""
         merged = current.copy()
         
+        def _dedupe_list(a_list: list) -> list:
+            seen = set()
+            result = []
+            for item in a_list:
+                try:
+                    key = item if isinstance(item, (str, int, float, bool, type(None))) else json.dumps(item, sort_keys=True)
+                except Exception:
+                    key = str(item)
+                if key not in seen:
+                    seen.add(key)
+                    result.append(item)
+            return result
+        
         for key, new_value in new.items():
             if key not in merged:
                 merged[key] = new_value
@@ -232,8 +245,8 @@ Don't repeat existing information unless it's been clarified or quantified.
                     if len(new_value) > len(current_value) * 1.5:  # Significantly more detailed
                         merged[key] = new_value
                 elif isinstance(new_value, list) and isinstance(current_value, list):
-                    # Merge lists and deduplicate
-                    merged[key] = list(set(current_value + new_value))
+                    # Merge lists and deduplicate safely
+                    merged[key] = _dedupe_list(current_value + new_value)
                 else:
                     # Default to new value if different
                     if new_value != current_value:
@@ -249,69 +262,37 @@ Don't repeat existing information unless it's been clarified or quantified.
         build_status = background_build.get("status", "idle")
         ready_for_generation = session_data.get("ready_for_generation", False)
         
-        # Expanded list of false claims to prevent
-        dangerous_lies = [
-            # Building claims
-            "I'm building this right now",
-            "The build is running", 
-            "ready in 12 minutes",
-            "I'm starting the build right now",
-            "I just pushed the final build",
-            "Your system is live",
-            "already built",
-            "just deployed",
-            "actively monitoring",
-            "already processed",
+        # Classify sentences for risky claim types and allow based on state
+        sentences = [s.strip() for s in response.split('.') if s.strip()]
+        safe_sentences = []
+        for s in sentences:
+            s_lower = s.lower()
+            claims_deploy = any(tok in s_lower for tok in ["deployed", "live at", "pushed the final build", "deployment", "went live"]) 
+            claims_building = any(tok in s_lower for tok in ["building now", "starting the build", "build is running"]) or ("building" in s_lower and "i'm" in s_lower)
+            claims_url = ("http://" in s_lower or "https://" in s_lower)
+            claims_credentials = any(tok in s_lower for tok in ["login:", "password:", "api key", "token:"])
+            claims_time_guarantee = any(tok in s_lower for tok in [" minutes", " hours", "by today", "in "]) 
             
-            # Fake URLs and systems
-            "going live at https://",
-            "lunivate-tasks.web.app",
-            "lunivate-contracts.miosa.app",
-            ".web.app",
-            ".miosa.app",
-            "Your login:",
-            "Your password:",
-            "Check your email in",
-            "sending you the link",
-            "bookmark that URL",
-            "login link",
-            "custom subdomain",
-            "will be live at",
-            "spinning up",
-            "infrastructure for",
-            "login credentials",
-            "access with a complete onboarding",
+            allowed = True
+            if claims_credentials:
+                allowed = False
+            if claims_deploy or claims_url:
+                allowed = allowed and build_status not in ("idle", "planning", "analyzing") and ready_for_generation
+            if claims_building:
+                allowed = allowed and ready_for_generation
+            if claims_time_guarantee:
+                allowed = False
             
-            # False data claims
-            "pulled your last 50",
-            "extracted 23 active tasks",
-            "7 urgent items",
-            "already working",
-            "actively watching",
-            "has already processed"
-        ]
+            if allowed:
+                safe_sentences.append(s)
         
-        # Check for and remove dangerous lies
-        response_lower = response.lower()
-        for lie in dangerous_lies:
-            if lie.lower() in response_lower:
-                # Only make claims we can actually deliver on
-                if not ready_for_generation and build_status == "idle":
-                    # Remove the entire sentence containing the lie
-                    sentences = response.split('.')
-                    cleaned_sentences = []
-                    for sentence in sentences:
-                        if lie.lower() not in sentence.lower():
-                            cleaned_sentences.append(sentence)
-                    response = '.'.join(cleaned_sentences).strip()
-                    if response and not response.endswith('.'):
-                        response += '.'
+        cleaned = ('. '.join(safe_sentences)).strip()
+        if cleaned and not cleaned.endswith('.'):
+            cleaned += '.'
+        if not cleaned:
+            cleaned = "I understand your requirements. Let me gather more details to build the right solution for you."
         
-        # If response becomes too short after cleaning, provide honest alternative
-        if len(response) < 50:
-            response = "I understand your requirements. Let me gather more details to build the right solution for you."
-        
-        return response
+        return cleaned
     
     def _get_progress_details(self, extracted_info: Dict, progress_result: Dict) -> Dict:
         """Get detailed breakdown using system context"""
