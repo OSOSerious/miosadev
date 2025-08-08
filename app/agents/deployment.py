@@ -160,9 +160,9 @@ CMD ["nginx", "-g", "daemon off;"]
         services.append("""  db:
     image: postgres:15-alpine
     environment:
-      POSTGRES_USER: ${DB_USER:-appuser}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-securepass}
-      POSTGRES_DB: ${DB_NAME:-appdb}
+      POSTGRES_USER: ${DB_USER:?missing}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?missing}
+      POSTGRES_DB: ${DB_NAME:?missing}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
@@ -179,8 +179,8 @@ CMD ["nginx", "-g", "daemon off;"]
     ports:
       - "8000:8000"
     environment:
-      DATABASE_URL: postgresql://${DB_USER:-appuser}:${DB_PASSWORD:-securepass}@db:5432/${DB_NAME:-appdb}
-      JWT_SECRET: ${JWT_SECRET:-your-secret-key}
+      DATABASE_URL: ${DATABASE_URL:?missing}
+      JWT_SECRET: ${JWT_SECRET:?missing}
     depends_on:
       db:
         condition: service_healthy
@@ -565,20 +565,20 @@ echo "Rollback complete!"
     
     async def _generate_environment_config(self, components: Dict) -> Dict:
         return {
-            ".env.example": """# Database
-DB_HOST=localhost
+            ".env.example": """# Database (required in production)
+DB_HOST=
 DB_PORT=5432
-DB_USER=appuser
-DB_PASSWORD=changeme
-DB_NAME=appdb
+DB_USER=
+DB_PASSWORD=
+DB_NAME=
 
-# Application
-JWT_SECRET=your-secret-key
-API_URL=http://localhost:8000
-FRONTEND_URL=http://localhost:3000
+# Application (generate a strong random secret in production)
+JWT_SECRET=
+API_URL=
+FRONTEND_URL=
 
 # External Services
-REDIS_URL=redis://localhost:6379
+REDIS_URL=
 """,
             "production.env": "# Production environment variables",
             "staging.env": "# Staging environment variables"

@@ -27,10 +27,14 @@ class _TokenTracker:
         return max(1, int(len(text) / 4))
 
     def _model_cost(self, model: str, input_tokens: int, output_tokens: int) -> float:
-        """Very rough cost estimate mapping; adjust as needed for your pricing."""
-        # USD per 1k tokens (input, output)
-        pricing = {
-            # Ballpark placeholders; replace with actual Groq pricing if available
+        """ESTIMATE ONLY: rough cost estimate mapping; override via env/settings.
+
+        Reads optional overrides from settings via GROQ_PRICING_OVERRIDES env as
+        a JSON mapping of model -> [in_per_k, out_per_k]. If not provided, falls
+        back to conservative defaults. These values are NOT used for billing.
+        """
+        # Default USD per 1k tokens (input, output) — estimates only
+        default_pricing = {
             "llama-3.1-8b-instant": (0.05, 0.08),
             "llama-3.2-3b-preview": (0.02, 0.03),
             "llama-3.2-11b-vision-preview": (0.10, 0.12),
@@ -39,7 +43,14 @@ class _TokenTracker:
             "llama3-groq-8b-8192-tool-use-preview": (0.08, 0.10),
             "llama3-groq-70b-8192-tool-use-preview": (0.50, 0.70),
         }
-        inp_k, out_k = pricing.get(model, (0.05, 0.08))
+        try:
+            overrides = getattr(settings, "GROQ_PRICING_OVERRIDES", None) or {}
+            pricing = {**default_pricing, **overrides}
+        except Exception:
+            pricing = default_pricing
+        inp_k, out_k = pricing.get(model, default_pricing["llama-3.1-8b-instant"])  # fallback
+        # Make it explicit in logs that this is an estimate
+        logger.debug("Cost estimate only (not for billing). model=%s in_k=%.4f out_k=%.4f", model, inp_k, out_k)
         return (input_tokens / 1000.0) * inp_k + (output_tokens / 1000.0) * out_k
 
     def track(self, model: str, prompt: str, output: Optional[str], ok: bool, started: float, error: Optional[Exception] = None) -> Dict[str, Any]:

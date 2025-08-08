@@ -662,7 +662,7 @@ Right now I need: {self._get_friendly_step_description(current_step)}
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=postgresql://user:password@db:5432/app
+      - DATABASE_URL=${DATABASE_URL}
     depends_on:
       - db
             """)
@@ -683,9 +683,9 @@ Right now I need: {self._get_friendly_step_description(current_step)}
   db:
     image: postgres:15
     environment:
-      - POSTGRES_USER=user
-      - POSTGRES_PASSWORD=password
-      - POSTGRES_DB=app
+      - POSTGRES_USER=${DB_USER}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_DB=${DB_NAME}
     volumes:
       - postgres_data:/var/lib/postgresql/data
         """)
@@ -737,8 +737,9 @@ jobs:
     
     async def _extract_env_vars(self, components: Dict) -> Dict:
         env_vars = {
-            "DATABASE_URL": "postgresql://user:password@localhost:5432/app",
-            "JWT_SECRET": "your-secret-key",
+            # Expect these to be provided via runtime env or .env, no insecure defaults
+            "DATABASE_URL": "",
+            "JWT_SECRET": "",
             "FRONTEND_URL": "http://localhost:3000",
             "BACKEND_URL": "http://localhost:8000"
         }

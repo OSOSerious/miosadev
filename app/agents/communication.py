@@ -256,42 +256,50 @@ Don't repeat existing information unless it's been clarified or quantified.
     
     def _validate_response_truthfulness(self, response: str, session_data: Dict) -> str:
         """Prevent AI from making false claims about systems that don't exist"""
-        
-        # Get actual system state
-        background_build = session_data.get("background_build", {})
-        build_status = background_build.get("status", "idle")
-        ready_for_generation = session_data.get("ready_for_generation", False)
-        
-        # Classify sentences for risky claim types and allow based on state
-        sentences = [s.strip() for s in response.split('.') if s.strip()]
-        safe_sentences = []
-        for s in sentences:
-            s_lower = s.lower()
-            claims_deploy = any(tok in s_lower for tok in ["deployed", "live at", "pushed the final build", "deployment", "went live"]) 
-            claims_building = any(tok in s_lower for tok in ["building now", "starting the build", "build is running"]) or ("building" in s_lower and "i'm" in s_lower)
-            claims_url = ("http://" in s_lower or "https://" in s_lower)
-            claims_credentials = any(tok in s_lower for tok in ["login:", "password:", "api key", "token:"])
-            claims_time_guarantee = any(tok in s_lower for tok in [" minutes", " hours", "by today", "in "]) 
-            
+        import re
+
+        # Session/context flags
+        build_status = str(session_data.get("build_status", "idle")).lower()
+        ready_for_generation = bool(session_data.get("ready_for_generation", False))
+
+        # Split response into rough sentences
+        parts = re.split(r"(?<=[.!?])\s+", response.strip()) if response else []
+        safe_sentences: list[str] = []
+
+        for s in parts:
+            text = s.strip()
+            if not text:
+                continue
+
+            lowered = text.lower()
+
+            # Heuristics for risky claims
+            claims_url = ("http://" in lowered) or ("https://" in lowered)
+            claims_deploy = any(x in lowered for x in [
+                "deployed", "is live", "available at", "production url", "live at"
+            ])
+            claims_building = any(x in lowered for x in [
+                "i'll start building", "i will start building", "building now", "i am building"
+            ])
+            claims_time_guarantee = bool(re.search(r"\b(in|within)\s+\d+\s+(minute|minutes|hour|hours)\b", lowered)) or "guarantee" in lowered
+
             allowed = True
-            if claims_credentials:
-                allowed = False
             if claims_deploy or claims_url:
-                allowed = allowed and build_status not in ("idle", "planning", "analyzing") and ready_for_generation
+                allowed = allowed and (build_status not in ("idle", "planning", "analyzing")) and ready_for_generation
             if claims_building:
                 allowed = allowed and ready_for_generation
             if claims_time_guarantee:
                 allowed = False
-            
+
             if allowed:
-                safe_sentences.append(s)
-        
-        cleaned = ('. '.join(safe_sentences)).strip()
+                safe_sentences.append(text)
+
+        cleaned = (". ".join(safe_sentences)).strip()
         if cleaned and not cleaned.endswith('.'):
             cleaned += '.'
         if not cleaned:
             cleaned = "I understand your requirements. Let me gather more details to build the right solution for you."
-        
+
         return cleaned
     
     def _get_progress_details(self, extracted_info: Dict, progress_result: Dict) -> Dict:
